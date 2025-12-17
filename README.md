@@ -1,147 +1,156 @@
-# 智能寻源比价助手
+# 项目设计文档
 
-基于 React + TypeScript + Vite 构建的智能采购寻源比价 Agent 应用，集成硅基流动平台的 **DeepSeek-R1** 大模型。
+## 1. 总览
+- 目标：实现“采购寻源比价”智能对话助手，支持会话管理、文件解析、深度思考展示与消息持久化。
+- 技术栈
+  - 后端：FastAPI (Python 3.12) + SQLAlchemy Async + MySQL (asyncmy) + OpenAI 兼容客户端。
+  - 前端：React + Vite + TypeScript + Zustand。
+  - 部署：Docker / docker-compose（前端、后端、MySQL）。
+- 数据模型：会话（conversations）1:N 消息（messages），支持模型名称与深度思考字段存储。
 
-## 🚀 功能特性
+## 2. 目录结构（关键部分）
+- backend/src
+  - main.py：应用入口、CORS、异常处理、路由挂载。
+  - config.py：配置（数据库、LLM、外部搜索），环境变量注入。
+  - prompt.py：系统提示词（采购寻源专家角色）。
+  - db/
+    - session.py：Async 引擎 + 会话 + 上海时区 connect hook。
+    - models.py：ORM 定义（Base、Conversation、Message）。
+  - crud/：通用 CRUD 基类与会话/消息 CRUD 封装。
+  - schemas/ai.py：路由请求/响应模型（聊天、同步、消息返回等）。
+  - routers/ai.py：核心接口（聊天、文件解析、标的提取、会话同步/查询/删除）。
+  - services/llm_client.py：OpenAI 兼容客户端懒加载。
+- frontend/src
+  - App.tsx：整体布局（Sidebar + ChatArea）。
+  - store/index.ts：Zustand 全局状态，会话/消息加载、持久化。
+  - utils/api.ts：前端 API 封装（会话同步、消息获取、聊天流、文件解析）。
+  - components/ChatArea、ChatInput、MessageBubble 等：聊天 UI、输入、思考过程展示。
+  - config/index.ts：模型列表、默认模型、API 基础路径。
+- deploy/
+  - docker-compose.yml、MakeFile、script/init-sql.sql：编排与初始化 SQL。
 
-- **极简对话界面** - 类似 DeepSeek 官网的沉浸式对话体验
-- **深色/浅色主题** - 支持主题切换，默认跟随系统
-- **文件上传分析** - 支持 Excel、PDF、Word、PPT 等格式的采购方案
-- **流式输出** - 打字机效果展示 AI 回复
-- **思考过程展示** - 展示 DeepSeek-R1 的推理过程（reasoning_content）
-- **对话历史管理** - 自动保存对话，支持历史记录回溯
-- **响应式设计** - 支持 PC 端与移动端
+## 3. 后端设计
+### 3.1 配置（config.py）
+- DATABASE_URL：示例 mysql+asyncmy://user:pass@host:port/db。
+- LLM_API_KEY / LLM_BASE_URL / LLM_DEFAULT_MODEL：OpenAI 兼容配置，可指向 DeepSeek 等。
+- LLM_MAX_TOKENS / LLM_TEMPERATURE / LLM_STREAM：生成参数统一后端管理。
+- WEB_SEARCH_API_URL / WEB_SEARCH_API_KEY：外部搜索代理（当前前端未调用）。
 
-## 📦 技术栈
+### 3.2 数据模型（db/models.py）
+- Base：id 自增、created_at/updated_at，默认使用上海时区（无 tzinfo）。
+- Conversation：
+  - name, first_user_message, status, pinned(bool)。
+  - 关系：messages（级联删除）。
+- Message：
+  - conversation_id(FK), role(user/assistant/system), content(Text)。
+  - deep_thinking(Text，可空)，model(当前使用模型名，可空)。
 
-| 技术 | 说明 |
-|------|------|
-| React 18 | 前端框架 |
-| TypeScript | 类型安全 |
-| Vite | 构建工具 |
-| Zustand | 状态管理 |
-| React Markdown | Markdown 渲染 |
-| Lucide React | 图标库 |
-| DeepSeek-R1 | AI 模型（硅基流动平台） |
+### 3.3 数据库会话（db/session.py）
+- create_async_engine + async_sessionmaker。
+- 连接池：pool_size=200, max_overflow=100, pool_timeout=65, pool_recycle=4h。
+- connect hook：SET time_zone = '+08:00'（上海时区）。
 
-## 🔑 配置 API Key
+### 3.4 CRUD 封装
+- CRUDBase：get/create/update_by_id/delete_by_id。
+- crud_conversations：列表按 pinned desc, updated_at desc；重命名/触达更新时间；删除。
+- crud_messages：创建消息（含 deep_thinking/model）；按会话列表/近期上下文；按会话删除。
 
-本项目使用硅基流动平台的 DeepSeek-R1 模型，需要配置 API Key：
+### 3.5 路由（routers/ai.py，前缀 /api）
+- /health（main.py 注册）：存活检查。
+- POST /files/parse：多文件解析，UTF-8 解码失败返回提示，拼接 formatted 文本。
+- POST /chat/completions：
+  - 入参：model(可选)，messages（当前消息列表），conversation_id(可选)。
+  - 历史构建：系统 prompt + DB 拉取该会话历史（最多 200 条）+ 本次消息。
+  - 生成参数：max_tokens/temperature/stream 取自 settings。
+  - 返回：流式 SSE（包含 reasoning_content 时前端展示思考）或一次性 JSON。
+- POST /items/extract：基于对话文本的标的物提取（LLM），返回 OpenAI 兼容格式。
+- POST /conversations/sync：
+  - 功能：创建/更新会话元数据，并仅写入“最新一条消息”（避免覆盖历史）。
+  - 入参：id(可空)、title、messages（含 deep_thinking/model/timestamp）、created_at/updated_at。
+  - 生成会话名：未传 title 则用“新对话”。
+  - 返回：ConversationOut（id/title/时间戳）。
+- GET /conversations：列表（按 pinned/updated_at 排序），返回毫秒时间戳。
+- GET /conversations/{id}/messages：返回消息列表（含 deep_thinking、model、timestamp 毫秒）。
+- DELETE /conversations/{id}：删除会话及其消息。
 
-### 1. 获取 API Key
+### 3.6 系统 Prompt（prompt.py）
+- 采购寻源专家角色设定，包含能力/输出要求/注意事项；在聊天历史最前注入。
 
-前往 [硅基流动控制台](https://cloud.siliconflow.cn/) 注册并获取 API Key。
+### 3.7 异常与 CORS（main.py）
+- CORSMiddleware：来源来自 CORS_ORIGINS 环境变量，含 * 时禁止 credentials。
+- 全局异常：HTTPException/Exception 统一 JSON 包装。
+- main() 入口便于 `python -m src.main` 或 uvicorn 运行。
 
-### 2. 配置环境变量
+## 4. 数据库脚本（deploy/script/init-sql.sql）
+- DROP DATABASE IF EXISTS source_agent; CREATE DATABASE source_agent utf8mb4。
+- 表结构
+  - conversations：id, created_at, updated_at, name, first_user_message, status, pinned(TINYINT)。
+  - messages：id, created_at, updated_at, conversation_id(FK), role, content, deep_thinking, model。
+- 无级联删除；messages 有外键到 conversations。
 
-在项目根目录创建 `.env` 文件：
+## 5. 前端设计
+### 5.1 状态与数据流（Zustand store/index.ts）
+- conversations：本地缓存当前会话列表与消息；selectedModel 默认 DEFAULT_MODEL。
+- loadConversationsFromBackend：拉取列表但不预装消息。
+- selectConversation(id)：切换时清空本地消息，调用 fetchConversationMessages，再写入（含 deep_thinking→thinking）。
+- createConversation：调用 /conversations/sync 获取后端 ID 后本地入列表。
+- addMessage：若无会话则先创建；添加本地消息并异步 persistConversation。
+- persistConversation：同步当前会话（过滤空内容消息），携带 deep_thinking 写回后端。
+- delete/rename：本地更新并调用后端（删除直接请求，重命名通过 persist）。
 
-```bash
-VITE_SILICONFLOW_API_KEY=your_api_key_here
-```
+### 5.2 前端 API 封装（utils/api.ts）
+- parseAndCacheFiles：POST /files/parse，缓存内容。
+- syncConversation / fetchConversations / fetchConversationMessages / deleteConversationBackend。
+- generateAIResponse：
+  - 先插入占位助手消息（思考中）。
+  - 构造当前用户消息（文件内容 + 输入），携带 conversation_id 和当前模型。
+  - 调用 /chat/completions，SSE 流式解析 content 与 reasoning_content（仅当模型名包含 DeepSeek-R1 时展示思考）。
+  - 实时更新最后一条助手消息；流结束后 persistConversation。
 
-### 3. 重启开发服务器
+### 5.3 UI 组件
+- Sidebar：会话列表、新建对话、模型设置入口、头像等。
+- ChatArea：渲染消息列表；空列表显示 WelcomeScreen。
+- MessageBubble：展示用户/助手消息；思考过程（thinking）可折叠；支持复制/重生成等交互。
+- ChatInput：底部输入区、文件选择、工具面板（提取标的等）。
+- ModelSettings/ToolSelector 等：模型选择、工具开关（与后端模型透传）。
 
-配置完成后重启服务器使配置生效。
+### 5.4 样式与体验
+- 主题：暗/亮主题，跟随系统或手动切换；消息流式显示光标动画。
+- 思考过程：当 deep_thinking/thinking 非空时展示“思考过程”折叠面板。
+- 消息过滤：渲染与持久化均过滤空内容，避免空白气泡。
 
-> ⚠️ **注意**：未配置 API Key 时，应用将使用演示模式（模拟响应）。
+## 6. LLM 调用流程
+1) 前端构造当前 user 消息，附上 conversation_id；后台自行拉历史并注入 system prompt。
+2) 后端调用 OpenAI 兼容接口（可指向 DeepSeek），参数来自 settings。
+3) 流式：SSE 返回 delta.content 和 reasoning_content，前端实时刷新。
+4) 结束：前端落库并通过 /conversations/sync 写回最新消息（含 deep_thinking）。
 
-## 🛠️ 开发
+## 7. 部署与运行
+- 开发
+  - 后端：`uvicorn src.main:app --reload`（需设置 DATABASE_URL, LLM_API_KEY 等）。
+  - 前端：`npm install` 或 `pnpm install`，`npm run dev`（Vite，默认代理 /api → http://localhost:8000）。
+- Docker / Compose
+  - backend/Dockerfile, frontend/Dockerfile。
+  - deploy/docker-compose.yml：启动前端、后端、MySQL；MakeFile 提供 up/down/logs/clean。
+  - 初始化数据库：`mysql ... < deploy/script/init-sql.sql` 或 compose 中自定义 init。
+- 文件存储：上传仅解析内存，不持久化（uploads/ 可按需挂载，当前无写入逻辑）。
 
-### 安装依赖
+## 8. 配置清单（关键环境变量）
+- DATABASE_URL：必填，asyncmy DSN。
+- LLM_API_KEY / LLM_BASE_URL / LLM_DEFAULT_MODEL / LLM_MAX_TOKENS / LLM_TEMPERATURE / LLM_STREAM。
+- WEB_SEARCH_API_KEY / WEB_SEARCH_API_URL（如启用外部搜索）。
+- CORS_ORIGINS：逗号分隔，含 * 时不带 credentials。
+- PORT：后端监听端口（默认 8000）。
 
-```bash
-npm install
-```
+## 9. 已知行为/约束
+- /conversations/sync 仅写入“最新一条”消息，避免历史被覆盖；历史读取依赖 GET /conversations/{id}/messages。
+- 深度思考字段 deep_thinking 前后端对齐：后端入库/返回，前端映射为 thinking 展示。
+- SSE reasoning_content 仅在模型支持时返回（例如 DeepSeek-R1）。
+- 会话时间戳为毫秒（前端）/ 后端存储为本地时间（上海时区，无 tzinfo）。
 
-### 启动开发服务器
-
-```bash
-npm run dev
-```
-
-### 构建生产版本
-
-```bash
-npm run build
-```
-
-### 预览生产版本
-
-```bash
-npm run preview
-```
-
-## 📁 项目结构
-
-```
-src/
-├── components/          # React 组件
-│   ├── Sidebar/        # 侧边栏（历史对话）
-│   ├── ChatArea/       # 聊天主区域
-│   ├── ChatInput/      # 输入框组件
-│   ├── MessageBubble/  # 消息气泡
-│   ├── WelcomeScreen/  # 欢迎页面
-│   └── ChinaMobileLogo/ # Logo 组件
-├── config/             # 配置文件
-│   └── index.ts        # API 配置和 System Prompt
-├── store/              # Zustand 状态管理
-├── styles/             # 全局样式
-├── types/              # TypeScript 类型定义
-├── utils/              # 工具函数
-│   └── api.ts          # 硅基流动 API 调用
-├── App.tsx             # 应用入口
-└── main.tsx            # 渲染入口
-```
-
-## 🎨 主题定制
-
-主题变量定义在 `src/styles/index.css` 中，支持以下定制：
-
-- 背景色系 (`--bg-primary`, `--bg-secondary` 等)
-- 文字色系 (`--text-primary`, `--text-secondary` 等)
-- 品牌色 (`--accent-primary`, `--accent-secondary`)
-- 圆角大小 (`--radius-sm`, `--radius-md` 等)
-- 动画时长 (`--transition-fast`, `--transition-normal`)
-
-## 📋 支持的文件格式
-
-| 格式 | 扩展名 | 场景 |
-|------|--------|------|
-| Excel | .xlsx, .xls, .csv | 采购方案、项目立项书 |
-| PDF | .pdf | 技术规范书、合同 |
-| Word | .docx, .doc | 技术方案、说明文档 |
-| PPT | .pptx, .ppt | 演示文稿、汇报材料 |
-| 文本 | .txt | 简单文本内容 |
-
-## 🤖 模型配置
-
-模型配置位于 `src/config/index.ts`：
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| baseUrl | https://api.siliconflow.cn/v1 | 硅基流动 API 地址 |
-| model | deepseek-ai/DeepSeek-R1 | 使用的模型 |
-| maxTokens | 4096 | 最大输出 Token 数 |
-| temperature | 0.7 | 温度参数 |
-| stream | true | 流式输出 |
-
-### System Prompt
-
-系统预设提示词定义了 AI 助手的角色为"资深采购寻源专家"，具备：
-- 方案分析能力
-- 多维对比能力
-- 报告生成能力
-- 决策建议能力
-
-## 🔧 后续扩展
-
-- [ ] 实现文件解析后端服务（提取 Excel/PDF 内容）
-- [ ] 添加用户认证系统
-- [ ] 接入数据库持久化对话历史
-- [ ] 添加 RAG 检索增强生成
-
-## 📄 许可证
-
-MIT License
+## 10. 可扩展点
+- Web 搜索接口后端代理已预留，可在前端接入 sources 展示。
+- 文件持久化与清理策略（当前只解析文本，不落盘）。
+- 增加鉴权、多租户隔离、速率限制。
+- 引入任务队列用于长耗时解析或多轮工具调用。
 
