@@ -1,1 +1,34 @@
-node_modules
+# Node / frontend
+node_modules/
+pnpm-lock.yaml
+package-lock.json
+yarn.lock
+dist/
+build/
+.parcel-cache/
+.turbo/
+.vite/
+.cache/
+.eslintcache
+
+# Python / backend
+.venv/
+env/
+venv/
+*.pyc
+__pycache__/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+uploads/
+
+# OS / misc
+.DS_Store
+Thumbs.db
+*.log
+
+# IDE
+.idea/
+.vscode/
+
+
