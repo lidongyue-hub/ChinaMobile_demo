@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { User, Bot, ChevronDown, ChevronUp, Copy, Check, FileText, Link2, ExternalLink, RefreshCw, ThumbsUp, ThumbsDown, X, Database } from 'lucide-react'
+import { User, Bot, ChevronDown, ChevronUp, Copy, Check, FileText, Link2, ExternalLink, RefreshCw, ThumbsUp, ThumbsDown, X, Database, Download } from 'lucide-react'
+import { exportToWord } from '../../utils/wordExport'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
@@ -218,6 +219,7 @@ export default function MessageBubble({ message, isLatest, onRegenerate }: Messa
   const [showThinking, setShowThinking] = useState(false)
   const [showSources, setShowSources] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [downloading, setDownloading] = useState(false)
   const [liked, setLiked] = useState(false)
   const [disliked, setDisliked] = useState(false)
   const [showDislikeModal, setShowDislikeModal] = useState(false)
@@ -272,6 +274,25 @@ export default function MessageBubble({ message, isLatest, onRegenerate }: Messa
       } catch (e) {
         console.error('降级复制也失败:', e)
       }
+    }
+  }
+
+  const handleDownload = async () => {
+    if (downloading) return
+    
+    setDownloading(true)
+    try {
+      // 生成文件名（包含时间戳）
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+      const filename = `寻源比价报告_${timestamp}.docx`
+      
+      // 导出Word文档
+      await exportToWord(message.content, filename)
+    } catch (error) {
+      console.error('下载失败:', error)
+      alert(`下载失败: ${error instanceof Error ? error.message : '未知错误'}`)
+    } finally {
+      setDownloading(false)
     }
   }
 
@@ -524,6 +545,14 @@ export default function MessageBubble({ message, isLatest, onRegenerate }: Messa
               title="复制内容"
             >
               {copied ? <Check size={16} /> : <Copy size={16} />}
+            </button>
+            <button 
+              className={`action-btn ${downloading ? 'loading' : ''}`}
+              onClick={handleDownload}
+              title="下载Word文档"
+              disabled={downloading}
+            >
+              <Download size={16} />
             </button>
             <button 
               className="action-btn"

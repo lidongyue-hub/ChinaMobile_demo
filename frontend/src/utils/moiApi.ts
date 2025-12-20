@@ -1,19 +1,20 @@
 /**
  * MOI 数据库 API 工具
  * 用于查询内部数据源（潜在供应商推荐等）
+ * 
+ * 注意：现在所有MOI查询都通过后端API进行，前端不再直接调用MOI API
  */
 
-// MOI API 配置
-// 开发环境使用 Vite 代理（代理层会自动注入 API Key）
-// 生产环境需要配置后端代理
-const isDev = import.meta.env.DEV
+import { BACKEND_API_CONFIG } from '../config'
 
-const MOI_CONFIG = {
-  // 开发环境通过 Vite 代理 (/moi-api)
-  baseUrl: isDev ? '/moi-api' : 'https://freetier-01.cn-hangzhou.cluster.cn-dev.matrixone.tech',
-  // API Key 仅在生产环境直接请求时使用（开发环境由代理注入）
-  apiKey: 'izzk2HYoLc1XhoXPkOP4iL5H6ZBvgnCCvFDifnglwKRSmVYj-QD8KeLQ9Chpq9baAtJjW9WCJimFtF-c'
-}
+// MOI数据库配置（仅用于信息展示，现在所有查询都通过后端API）
+// const MOI_CONFIG = {
+//   database: 'xunyuan_agent',
+//   tables: {
+//     bidding: 'bidding_records_1',
+//     productPrice: 'product_price'
+//   }
+// }
 
 // SQL 查询结果类型
 export interface SQLQueryResult {
@@ -24,71 +25,40 @@ export interface SQLQueryResult {
 
 /**
  * 执行 SQL 查询
+ * 通过后端API调用MOI数据库
  */
 export async function runSQL(statement: string): Promise<SQLQueryResult> {
   try {
-    console.log('MOI API 请求:', MOI_CONFIG.baseUrl + '/catalog/nl2sql/run_sql')
+    console.log('通过后端API执行SQL:', statement.substring(0, 100) + '...')
     
-    // 构建请求头
-    // 开发环境：不发送 moi-key（由 Vite 代理注入），避免 CORS 预检请求
-    // 生产环境：需要发送 moi-key
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json'
-    }
-    
-    // 仅在生产环境添加 API Key header
-    if (!isDev) {
-      headers['moi-key'] = MOI_CONFIG.apiKey
-    }
-    
-    const response = await fetch(`${MOI_CONFIG.baseUrl}/catalog/nl2sql/run_sql`, {
+    const response = await fetch(`${BACKEND_API_CONFIG.baseUrl}/api/moi/run_sql`, {
       method: 'POST',
-      headers,
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
       body: JSON.stringify({
-        operation: 'run_sql',
         statement: statement
       })
     })
 
     if (!response.ok) {
       const errorText = await response.text()
-      console.error('MOI API 错误:', response.status, errorText)
-      return { error: `API 请求失败: ${response.status} - ${errorText}` }
+      console.error('后端API错误:', response.status, errorText)
+      return { error: `API请求失败: ${response.status} - ${errorText}` }
     }
 
     const data = await response.json()
-    console.log('MOI API 响应:', data)
+    console.log('后端API响应:', data)
     
-    // 解析 API 响应
-    if (data.code && data.code !== 'OK') {
-      return { error: data.msg || '查询失败' }
+    // 后端已经返回了columns和rows，直接使用
+    return {
+      columns: data.columns || [],
+      rows: data.rows || [],
+      error: data.error
     }
-
-    // 解析结果 - 数据在 data.results[0] 里
-    const results = data.data?.results?.[0]
-    if (!results) {
-      return { columns: [], rows: [] }
-    }
-    
-    const columns = results.columns || []
-    const rawRows = results.rows || []
-    
-    // 将二维数组转换为对象数组
-    // rows: [["value1", "value2"], ...] => [{col1: "value1", col2: "value2"}, ...]
-    const rows = rawRows.map((row: unknown[]) => {
-      const obj: Record<string, unknown> = {}
-      columns.forEach((col: string, index: number) => {
-        obj[col] = row[index]
-      })
-      return obj
-    })
-
-    console.log('解析后的数据:', { columns, rows })
-    
-    return { columns, rows }
   } catch (error) {
-    console.error('MOI SQL 执行错误:', error)
+    console.error('SQL执行错误:', error)
     return { error: error instanceof Error ? error.message : '未知错误' }
   }
 }
@@ -156,101 +126,216 @@ export async function queryHistoricalPerformance(
 }> {
   onProgress?.('start')
   
-  const escapedItem = itemName.replace(/'/g, "''")
+  try {
+    console.log('通过后端API查询历史表现:', itemName)
+    
+    const response = await fetch(`${BACKEND_API_CONFIG.baseUrl}/api/moi/query/historical-performance`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({
+        item_name: itemName
+      })
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      onProgress?.('error')
+      return {
+        text: `#### 历史表现\n\n❌ 查询失败: ${response.status} - ${errorText}\n`,
+        suppliers: [],
+        rawResult: { error: `API请求失败: ${response.status}` }
+      }
+    }
+
+    const data = await response.json()
+    console.log('后端API响应:', data)
+
+    const result: SQLQueryResult = {
+      columns: data.columns || [],
+      rows: data.rows || [],
+      error: data.error
+    }
+
+    if (result.error) {
+      onProgress?.('error')
+      return {
+        text: `#### 历史表现\n\n❌ 查询失败: ${result.error}\n`,
+        suppliers: [],
+        rawResult: result
+      }
+    }
   
-  const sql = `
-SELECT 
-    \`供应商名称\`, 
-    COUNT(*) AS \`投标次数\`,
-    SUM(CASE WHEN \`参与状态\` = '中标' THEN 1 ELSE 0 END) AS \`中标次数\`,
-    ROUND(SUM(CASE WHEN \`参与状态\` = '中标' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS \`中标率(%)\`,
-    SUM(CAST(REPLACE(\`中标金额（万元）\`, ',', '') AS DECIMAL(15,2))) AS \`合计中标金额（万元）\`
-FROM \`原始数据\`.\`2\`
-WHERE (\`项目名称\` LIKE '%${escapedItem}%' OR \`细化产品\` LIKE '%${escapedItem}%')
-GROUP BY \`供应商名称\`
-ORDER BY \`中标次数\` DESC, \`合计中标金额（万元）\` DESC
-LIMIT 10;
-  `.trim()
+    onProgress?.('done')
   
-  console.log('查询历史表现:', sql)
+    // 提取供应商名称列表
+    const suppliers = (result.rows || [])
+      .map(row => row['供应商名称'] as string)
+      .filter(Boolean)
   
-  const result = await runSQL(sql)
+    console.log('查询到供应商:', suppliers)
   
-  if (result.error) {
+    const text = formatQueryResultToMarkdown(
+      result, 
+      '历史表现', 
+      '供应商过往合作的交付质量、按时交货率等表现'
+    )
+  
+    return { text, suppliers, rawResult: result }
+  } catch (error) {
     onProgress?.('error')
-    return { 
-      text: `#### 历史表现\n\n❌ 查询失败: ${result.error}\n`, 
+    console.error('查询历史表现失败:', error)
+    return {
+      text: `#### 历史表现\n\n❌ 查询失败: ${error instanceof Error ? error.message : '未知错误'}\n`,
       suppliers: [],
-      rawResult: result 
+      rawResult: { error: error instanceof Error ? error.message : '未知错误' }
     }
   }
-  
-  onProgress?.('done')
-  
-  // 提取供应商名称列表
-  const suppliers = (result.rows || [])
-    .map(row => row['供应商名称'] as string)
-    .filter(Boolean)
-  
-  console.log('查询到供应商:', suppliers)
-  
-  const text = formatQueryResultToMarkdown(
-    result, 
-    '历史表现', 
-    '供应商过往合作的交付质量、按时交货率等表现'
-  )
-  
-  return { text, suppliers, rawResult: result }
 }
 
 /**
  * 查询二采产品价格库
- * 从 `原始数据`.`3` 表中查询价格数据
+ * 通过后端API查询价格数据（使用LIKE查询）
  */
 export async function querySecondaryPrice(
   itemName: string,
   onProgress?: (status: 'start' | 'done' | 'error') => void
-): Promise<{ 
-  text: string; 
-  rawResult: SQLQueryResult 
+): Promise<{
+  text: string;
+  rawResult: SQLQueryResult
 }> {
   onProgress?.('start')
-  
-  const escapedItem = itemName.replace(/'/g, "''")
-  
-  // 只查询关键字段：物料短描述、物料单位、平均单价、最高价、最低价
-  const sql = `
-SELECT 
-  \`物料短描述\`,
-  \`物料单位\`,
-  \`平均单价（元）\`,
-  \`最高价（元）\`,
-  \`最低价（元）\`
-FROM \`原始数据\`.\`3\`
-WHERE \`物料短描述\` LIKE '%${escapedItem}%'
-LIMIT 10;
-  `.trim()
-  
-  console.log('查询二采价格:', sql)
-  
-  const result = await runSQL(sql)
-  
-  if (result.error) {
+
+  try {
+    console.log('通过后端API查询二采价格:', itemName)
+    
+    const response = await fetch(`${BACKEND_API_CONFIG.baseUrl}/api/moi/query/secondary-price`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({
+        item_name: itemName
+      })
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      onProgress?.('error')
+      return {
+        text: `#### 二采产品价格\n\n❌ 查询失败: ${response.status} - ${errorText}\n`,
+        rawResult: { error: `API请求失败: ${response.status}` }
+      }
+    }
+
+    const data = await response.json()
+    console.log('后端API响应:', data)
+
+    const result: SQLQueryResult = {
+      columns: data.columns || [],
+      rows: data.rows || [],
+      error: data.error
+    }
+
+    if (result.error) {
+      onProgress?.('error')
+      return {
+        text: `#### 二采产品价格\n\n❌ 查询失败: ${result.error}\n`,
+        rawResult: result
+      }
+    }
+
+    onProgress?.('done')
+
+    const text = formatQueryResultToMarkdown(
+      result,
+      '二采产品价格',
+      '二次采购价格查询结果'
+    )
+
+    return { text, rawResult: result }
+  } catch (error) {
     onProgress?.('error')
-    return { 
-      text: `#### 二采产品价格\n\n❌ 查询失败: ${result.error}\n`, 
-      rawResult: result 
+    console.error('查询二采价格失败:', error)
+    return {
+      text: `#### 二采产品价格\n\n❌ 查询失败: ${error instanceof Error ? error.message : '未知错误'}\n`,
+      rawResult: { error: error instanceof Error ? error.message : '未知错误' }
     }
   }
-  
-  onProgress?.('done')
-  
-  const text = formatQueryResultToMarkdown(
-    result, 
-    '二采产品价格', 
-    '二次采购历史价格数据，包含采购渠道、价格、数量等信息'
-  )
-  
-  return { text, rawResult: result }
+}
+
+/**
+ * 查询采购项目数据
+ * 通过后端API查询采购项目信息
+ */
+export async function queryProcurementProjects(
+  itemName: string,
+  onProgress?: (status: 'start' | 'done' | 'error') => void
+): Promise<{
+  text: string;
+  rawResult: SQLQueryResult
+}> {
+  onProgress?.('start')
+
+  try {
+    console.log('通过后端API查询采购项目:', itemName)
+    
+    const response = await fetch(`${BACKEND_API_CONFIG.baseUrl}/api/moi/query/procurement-projects`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({
+        item_name: itemName
+      })
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      onProgress?.('error')
+      return {
+        text: `#### 采购项目查询\n\n❌ 查询失败: ${response.status} - ${errorText}\n`,
+        rawResult: { error: `API请求失败: ${response.status}` }
+      }
+    }
+
+    const data = await response.json()
+    console.log('后端API响应:', data)
+
+    const result: SQLQueryResult = {
+      columns: data.columns || [],
+      rows: data.rows || [],
+      error: data.error
+    }
+
+    if (result.error) {
+      onProgress?.('error')
+      return {
+        text: `#### 采购项目查询\n\n❌ 查询失败: ${result.error}\n`,
+        rawResult: result
+      }
+    }
+
+    onProgress?.('done')
+
+    const text = formatQueryResultToMarkdown(
+      result,
+      '采购项目查询',
+      '历史采购项目数据，包含项目名称、供应商、中标金额等信息'
+    )
+
+    return { text, rawResult: result }
+  } catch (error) {
+    onProgress?.('error')
+    console.error('查询采购项目失败:', error)
+    return {
+      text: `#### 采购项目查询\n\n❌ 查询失败: ${error instanceof Error ? error.message : '未知错误'}\n`,
+      rawResult: { error: error instanceof Error ? error.message : '未知错误' }
+    }
+  }
 }
 

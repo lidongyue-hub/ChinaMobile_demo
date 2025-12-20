@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from src.config import settings
-from src.routers import ai
+from src.routers import ai, moi
 from src.utils.logger import setup_logging
 
 # 初始化日志系统
@@ -71,6 +71,7 @@ async def health_check() -> dict:
 
 
 app.include_router(ai.router, tags=["ai"])
+app.include_router(moi.router, tags=["moi"])
 
 
 @app.exception_handler(HTTPException)

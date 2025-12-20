@@ -36,6 +36,16 @@ class Settings(BaseModel):
     )
     WEB_SEARCH_API_KEY: str = os.getenv("WEB_SEARCH_API_KEY", "")
 
+    # MOI数据库配置（内部数据源）
+    MOI_BASE_URL: str = os.getenv(
+        "MOI_BASE_URL",
+        "https://freetier-01.cn-hangzhou.cluster.matrixonecloud.cn"
+    )
+    MOI_API_KEY: str = os.getenv(
+        "MOI_API_KEY",
+        "aAVwjAZB4RG_JcPaFR0ZVR4r5yitSjHeKimpdSFKsDaBEt4QzZGZk35D2dEIBmXXbJKG7XHTsTzq-GyC"
+    )
+
 
 settings = Settings()
 

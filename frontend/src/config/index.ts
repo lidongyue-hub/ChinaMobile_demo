@@ -50,6 +50,16 @@ export const API_CONFIG = {
   stream: true,
 }
 
+// 后端API配置（用于MOI数据库查询）
+// 在生产环境中，通过nginx代理访问后端API
+const isDev = import.meta.env.DEV
+export const BACKEND_API_CONFIG = {
+  // 开发环境直接访问localhost:8000，生产环境通过nginx代理（相对路径）
+  baseUrl: isDev 
+    ? (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000')
+    : '', // 生产环境使用相对路径，nginx会代理到后端
+}
+
 // System Prompt - 采购寻源专家角色设定
 export const SYSTEM_PROMPT = `你是中国移动的智能寻源比价助手，一位资深采购寻源专家。
 

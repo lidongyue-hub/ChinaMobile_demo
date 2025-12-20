@@ -1,6 +1,6 @@
 import type { DataSource } from '../components/ToolSelector'
 import type { SourceReference } from '../types'
-import { queryHistoricalPerformance, querySecondaryPrice } from './moiApi'
+import { queryHistoricalPerformance, querySecondaryPrice, queryProcurementProjects } from './moiApi'
 
 const BOCHA_API_URL = 'https://api.bocha.cn/v1/web-search'
 const BOCHA_API_KEY = 'sk-10d8268b4db242e396e713f69fb79d3c'
@@ -246,23 +246,56 @@ async function searchInternalSourceItem(
   
   // 根据不同的内部数据源类型处理
   if (source.id === 'procurement_project') {
-    // 采购项目查询 - 模拟数据
-    await new Promise(resolve => setTimeout(resolve, 500 + Math.random() * 500))
-    
-    text = `#### ${itemName}\n`
-    text += `**数据来源**: ${sourceInfo.description}\n\n`
-    text += `**历史采购记录**:\n`
-    text += `- 2024年Q3采购项目: 采购数量 500件，成交单价 ¥128.50，供应商: 华为技术有限公司\n`
-    text += `- 2024年Q2采购项目: 采购数量 300件，成交单价 ¥132.00，供应商: 中兴通讯股份有限公司\n`
-    text += `- 2024年Q1采购项目: 采购数量 200件，成交单价 ¥135.80，供应商: 烽火通信科技股份有限公司\n\n`
-    
-    sources.push({
-      title: `${itemName} - 历史采购项目记录`,
-      url: 'internal://procurement-project',
-      snippet: '历史采购项目数据，包含采购数量、成交价格、供应商信息',
-      sourceName: source.name,
-      itemName: itemName
-    })
+    // 采购项目查询 - 使用真实数据库
+    console.log(`查询采购项目数据，标的物: ${itemName}`)
+
+    try {
+      const { text: projectText, rawResult } = await queryProcurementProjects(
+        itemName,
+        (status) => console.log(`[${itemName}] 采购项目查询: ${status}`)
+      )
+
+      text = `### 【${itemName}】采购项目查询\n\n`
+      text += `> 以下数据来自采购项目数据库\n\n`
+      text += projectText
+
+      const recordCount = rawResult.rows?.length || 0
+
+      sources.push({
+        title: `${itemName} - 采购项目记录（数据库）`,
+        url: 'internal://procurement-project-db',
+        snippet: `基于采购项目数据库查询，共找到 ${recordCount} 个相关项目`,
+        sourceName: source.name,
+        itemName: itemName,
+        queryResult: rawResult.columns && rawResult.rows ? {
+          columns: rawResult.columns,
+          rows: rawResult.rows
+        } : undefined
+      })
+
+      // 如果查询失败，显示提示
+      if (rawResult.error) {
+        text += `\n⚠️ 注意：查询出错 (${rawResult.error})\n`
+      }
+    } catch (error) {
+      console.error('采购项目查询失败:', error)
+      // 降级到模拟数据
+      text = `#### ${itemName}\n`
+      text += `**数据来源**: ${sourceInfo.description}\n\n`
+      text += `⚠️ 查询失败，显示模拟数据\n\n`
+      text += `**历史采购记录**:\n`
+      text += `- 2024年Q3采购项目: 采购数量 500件，成交单价 ¥128.50，供应商: 华为技术有限公司\n`
+      text += `- 2024年Q2采购项目: 采购数量 300件，成交单价 ¥132.00，供应商: 中兴通讯股份有限公司\n`
+      text += `- 2024年Q1采购项目: 采购数量 200件，成交单价 ¥135.80，供应商: 烽火通信科技股份有限公司\n\n`
+
+      sources.push({
+        title: `${itemName} - 历史采购项目记录（模拟数据）`,
+        url: 'internal://procurement-project',
+        snippet: '历史采购项目数据，包含采购数量、成交价格、供应商信息',
+        sourceName: source.name,
+        itemName: itemName
+      })
+    }
   } else if (source.id === 'potential_supplier') {
     // 潜在供应商推荐 - 两阶段查询
     // 第一阶段：从内部数据库查询历史表现，获取供应商名单
