@@ -8,7 +8,7 @@ http {
 
     # 定义backend upstream
     upstream backend_upstream {
-        server ${BACKEND_HOST:-backend}:${BACKEND_PORT:-8000};
+        server ${BACKEND_HOST}:${BACKEND_PORT};
     }
 
     server {

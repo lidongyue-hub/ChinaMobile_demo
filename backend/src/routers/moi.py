@@ -93,18 +93,115 @@ LIMIT 20;
 class QueryHistoricalPerformanceRequest(BaseModel):
     """查询历史表现请求"""
     item_name: str
+    embedding: Optional[list[float]] = None
 
 
 @router.post("/query/historical-performance", response_model=SQLQueryResponse)
 async def query_historical_performance(request: QueryHistoricalPerformanceRequest) -> SQLQueryResponse:
     """
     查询潜在供应商历史表现
+    支持向量查询优先，LIKE查询为退化方案
     从 xunyuan_agent.bidding_records_1 表中查询供应商历史表现数据
     """
     try:
+        client = get_moi_client()
+
+        # 优先使用向量查询
+        if request.embedding:
+            try:
+                vector_str = "[" + ",".join(map(str, request.embedding)) + "]"
+
+                # 同时查询两个向量字段，取最好的结果
+                vector_results = []
+
+                # 查询项目名称向量
+                try:
+                    project_sql = f"""
+SELECT
+    t.`供应商名称`,
+    COUNT(*) AS `投标次数`,
+    SUM(CASE WHEN t.`参与状态` = '中标' THEN 1 ELSE 0 END) AS `中标次数`,
+    ROUND(SUM(CASE WHEN t.`参与状态` = '中标' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS `中标率(%)`,
+    SUM(CAST(REPLACE(t.`中标金额_万元`, ',', '') AS DECIMAL(15,2))) AS `合计中标金额（万元）`
+FROM
+    (
+        SELECT
+            `供应商名称`,
+            `参与状态`,
+            `中标金额_万元`
+        FROM
+            `xunyuan_agent`.`bidding_records_1`
+        ORDER BY l2_distance(`project_name_embedding`, '{vector_str}') ASC
+        LIMIT 50
+    ) AS t
+WHERE t.`参与状态` = '中标'
+GROUP BY
+    t.`供应商名称`
+ORDER BY
+    `中标次数` DESC,
+    `合计中标金额（万元）` DESC
+LIMIT 10;
+                    """.strip()
+
+                    project_result = await client.run_sql(project_sql)
+                    if project_result.get("rows") and len(project_result["rows"]) > 0:
+                        vector_results.append(("project", project_result))
+                except Exception as e:
+                    logger.warning(f"项目名称向量查询失败: {e}")
+
+                # 查询产品向量
+                try:
+                    product_sql = f"""
+SELECT
+    t.`供应商名称`,
+    COUNT(*) AS `投标次数`,
+    SUM(CASE WHEN t.`参与状态` = '中标' THEN 1 ELSE 0 END) AS `中标次数`,
+    ROUND(SUM(CASE WHEN t.`参与状态` = '中标' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS `中标率(%)`,
+    SUM(CAST(REPLACE(t.`中标金额_万元`, ',', '') AS DECIMAL(15,2))) AS `合计中标金额（万元）`
+FROM
+    (
+        SELECT
+            `供应商名称`,
+            `参与状态`,
+            `中标金额_万元`
+        FROM
+            `xunyuan_agent`.`bidding_records_1`
+        ORDER BY l2_distance(`product_embedding`, '{vector_str}') ASC
+        LIMIT 50
+    ) AS t
+WHERE t.`参与状态` = '中标'
+GROUP BY
+    t.`供应商名称`
+ORDER BY
+    `中标次数` DESC,
+    `合计中标金额（万元）` DESC
+LIMIT 10;
+                    """.strip()
+
+                    product_result = await client.run_sql(product_sql)
+                    if product_result.get("rows") and len(product_result["rows"]) > 0:
+                        vector_results.append(("product", product_result))
+                except Exception as e:
+                    logger.warning(f"产品向量查询失败: {e}")
+
+                # 如果有向量查询结果，选择最好的一个返回
+                if vector_results:
+                    # 优先选择结果更多的查询
+                    best_result = max(vector_results, key=lambda x: len(x[1]["rows"]))
+                    logger.info(f"使用 {best_result[0]} 向量查询，返回 {len(best_result[1]['rows'])} 条结果")
+                    return SQLQueryResponse(
+                        columns=best_result[1].get("columns", []),
+                        rows=best_result[1].get("rows", []),
+                        error=best_result[1].get("error")
+                    )
+            except Exception as e:
+                logger.warning(f"向量查询整体失败，将使用LIKE查询: {e}")
+                # 继续执行LIKE查询，不抛出异常
+
+        # 向量查询无结果、失败或未提供向量，使用 LIKE 查询作为退化方案
         escaped_item = request.item_name.replace("'", "''")
-        
-        sql = f"""
+
+        fallback_sql = f"""
 SELECT
     t.`供应商名称`,
     COUNT(*) AS `投标次数`,
@@ -132,10 +229,9 @@ ORDER BY
     `合计中标金额（万元）` DESC
 LIMIT 10;
         """.strip()
-        
-        client = get_moi_client()
-        result = await client.run_sql(sql)
-        
+
+        result = await client.run_sql(fallback_sql)
+
         return SQLQueryResponse(
             columns=result.get("columns", []),
             rows=result.get("rows", []),
@@ -149,18 +245,85 @@ LIMIT 10;
 class QuerySecondaryPriceRequest(BaseModel):
     """查询二采价格请求"""
     item_name: str
+    embedding: Optional[list[float]] = None
 
 
 @router.post("/query/secondary-price", response_model=SQLQueryResponse)
 async def query_secondary_price(request: QuerySecondaryPriceRequest) -> SQLQueryResponse:
     """
     查询二采产品价格库
-    从 xunyuan_agent.product_price 表中查询价格数据（使用LIKE查询）
+    支持向量查询优先，LIKE查询为退化方案
+    从 xunyuan_agent.product_price 表中查询价格数据
     """
     try:
+        client = get_moi_client()
+
+        # 优先使用向量查询
+        if request.embedding:
+            vector_str = "[" + ",".join(map(str, request.embedding)) + "]"
+
+            # 同时查询两个向量字段，取最好的结果
+            vector_results = []
+
+            # 查询项目名称向量
+            try:
+                project_sql = f"""
+SELECT
+    `项目名称`,
+    `物料短描述`,
+    `物料单位`,
+    `平均单价（元）`,
+    `最高价（元）`,
+    `最低价（元）`,
+    l2_distance(`project_name_embedding`, '{vector_str}') AS similarity_score
+FROM `xunyuan_agent`.`product_price`
+ORDER BY similarity_score ASC
+LIMIT 3;
+                """.strip()
+
+                project_result = await client.run_sql(project_sql)
+                if project_result.get("rows") and len(project_result["rows"]) > 0:
+                    vector_results.append(("project", project_result))
+            except Exception as e:
+                logger.warning(f"项目名称向量查询失败: {e}")
+
+            # 查询产品向量（物料短描述）
+            try:
+                product_sql = f"""
+SELECT
+    `项目名称`,
+    `物料短描述`,
+    `物料单位`,
+    `平均单价（元）`,
+    `最高价（元）`,
+    `最低价（元）`,
+    l2_distance(`product_embedding`, '{vector_str}') AS similarity_score
+FROM `xunyuan_agent`.`product_price`
+ORDER BY similarity_score ASC
+LIMIT 3;
+                """.strip()
+
+                product_result = await client.run_sql(product_sql)
+                if product_result.get("rows") and len(product_result["rows"]) > 0:
+                    vector_results.append(("product", product_result))
+            except Exception as e:
+                logger.warning(f"产品向量查询失败: {e}")
+
+            # 如果有向量查询结果，选择最好的一个返回
+            if vector_results:
+                # 优先选择结果更多的查询，如果结果数量相同，选择第一个
+                best_result = max(vector_results, key=lambda x: len(x[1]["rows"]))
+                logger.info(f"使用 {best_result[0]} 向量查询，返回 {len(best_result[1]['rows'])} 条结果")
+                return SQLQueryResponse(
+                    columns=best_result[1].get("columns", []),
+                    rows=best_result[1].get("rows", []),
+                    error=best_result[1].get("error")
+                )
+
+        # 向量查询无结果或未提供向量，使用 LIKE 查询作为退化方案
         escaped_item = request.item_name.replace("'", "''")
-        
-        sql = f"""
+
+        fallback_sql = f"""
 SELECT
   `项目名称`,
   `物料短描述`,
@@ -173,10 +336,9 @@ WHERE `物料短描述` LIKE '%{escaped_item}%'
    OR `项目名称` LIKE '%{escaped_item}%'
 LIMIT 10;
         """.strip()
-        
-        client = get_moi_client()
-        result = await client.run_sql(sql)
-        
+
+        result = await client.run_sql(fallback_sql)
+
         return SQLQueryResponse(
             columns=result.get("columns", []),
             rows=result.get("rows", []),
@@ -185,4 +347,3 @@ LIMIT 10;
     except Exception as e:
         logger.exception(f"查询二采价格失败: {e}")
         raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
-

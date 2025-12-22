@@ -7,6 +7,60 @@
 
 import { BACKEND_API_CONFIG } from '../config'
 
+/**
+ * 生成文本的向量嵌入（直接调用硅基流动API）
+ */
+export async function generateEmbedding(text: string, model?: string): Promise<number[]> {
+  try {
+    console.log('生成文本向量:', text.substring(0, 50) + '...')
+
+    // 硅基流动API配置
+    const SILICONFLOW_BASE_URL = 'https://api.siliconflow.cn/v1'
+    const SILICONFLOW_API_KEY = (import.meta.env as any)?.REACT_APP_SILICONFLOW_API_KEY ||
+                                (import.meta.env as any)?.VITE_SILICONFLOW_API_KEY || ''
+    const defaultModel = 'BAAI/bge-large-zh-v1.5'
+
+    if (!SILICONFLOW_API_KEY) {
+      console.warn('硅基流动API密钥未配置，将跳过向量生成')
+      return []
+    }
+
+    const response = await fetch(`${SILICONFLOW_BASE_URL}/embeddings`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${SILICONFLOW_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        input: text,
+        model: model || defaultModel
+      })
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      console.error('硅基流动API调用失败:', response.status, errorText)
+      throw new Error(`硅基流动API错误: ${response.status} - ${errorText}`)
+    }
+
+    const data = await response.json()
+
+    if (!data.data || !data.data[0] || !data.data[0].embedding) {
+      console.error('API响应格式错误:', data)
+      throw new Error('API响应中未找到向量数据')
+    }
+
+    const embedding = data.data[0].embedding
+    console.log('向量生成成功，维度:', embedding.length)
+
+    return embedding
+  } catch (error) {
+    console.error('生成向量异常:', error)
+    // 如果向量生成失败，返回空数组，让后端使用LIKE查询
+    return []
+  }
+}
+
 // MOI数据库配置（仅用于信息展示，现在所有查询都通过后端API）
 // const MOI_CONFIG = {
 //   database: 'xunyuan_agent',
@@ -119,16 +173,29 @@ export function formatQueryResultToMarkdown(
 export async function queryHistoricalPerformance(
   itemName: string,
   onProgress?: (status: 'start' | 'done' | 'error') => void
-): Promise<{ 
-  text: string; 
-  suppliers: string[]; 
-  rawResult: SQLQueryResult 
+): Promise<{
+  text: string;
+  suppliers: string[];
+  rawResult: SQLQueryResult
 }> {
   onProgress?.('start')
-  
+
   try {
     console.log('通过后端API查询历史表现:', itemName)
-    
+
+    // 先生成文本的向量嵌入
+    console.log('生成项目名称向量...')
+    const embedding = await generateEmbedding(itemName, 'project')
+
+    // 如果向量生成失败（返回空数组），embedding 保持 undefined，后端会使用LIKE查询
+    const finalEmbedding = embedding.length > 0 ? embedding : undefined
+
+    if (finalEmbedding) {
+      console.log('向量生成成功，准备查询数据库')
+    } else {
+      console.log('向量生成失败，将使用LIKE查询')
+    }
+
     const response = await fetch(`${BACKEND_API_CONFIG.baseUrl}/api/moi/query/historical-performance`, {
       method: 'POST',
       headers: {
@@ -136,7 +203,8 @@ export async function queryHistoricalPerformance(
         'Accept': 'application/json'
       },
       body: JSON.stringify({
-        item_name: itemName
+        item_name: itemName,
+        ...(embedding && { embedding })  // 只有当embedding生成成功时才传递
       })
     })
 
@@ -210,7 +278,20 @@ export async function querySecondaryPrice(
 
   try {
     console.log('通过后端API查询二采价格:', itemName)
-    
+
+    // 先生成文本的向量嵌入
+    console.log('生成项目名称向量...')
+    const embedding = await generateEmbedding(itemName, 'project')
+
+    // 如果向量生成失败（返回空数组），embedding 保持 undefined，后端会使用LIKE查询
+    const finalEmbedding = embedding.length > 0 ? embedding : undefined
+
+    if (finalEmbedding) {
+      console.log('向量生成成功，准备查询数据库')
+    } else {
+      console.log('向量生成失败，将使用LIKE查询')
+    }
+
     const response = await fetch(`${BACKEND_API_CONFIG.baseUrl}/api/moi/query/secondary-price`, {
       method: 'POST',
       headers: {
@@ -218,7 +299,8 @@ export async function querySecondaryPrice(
         'Accept': 'application/json'
       },
       body: JSON.stringify({
-        item_name: itemName
+        item_name: itemName,
+        ...(finalEmbedding && { embedding: finalEmbedding })  // 只有当embedding生成成功时才传递
       })
     })
 

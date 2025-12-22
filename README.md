@@ -139,8 +139,29 @@
 - DATABASE_URL：必填，asyncmy DSN。
 - LLM_API_KEY / LLM_BASE_URL / LLM_DEFAULT_MODEL / LLM_MAX_TOKENS / LLM_TEMPERATURE / LLM_STREAM。
 - WEB_SEARCH_API_KEY / WEB_SEARCH_API_URL（如启用外部搜索）。
+- REACT_APP_SILICONFLOW_API_KEY：硅基流动API密钥（前端向量嵌入使用）。
 - CORS_ORIGINS：逗号分隔，含 * 时不带 credentials。
 - PORT：后端监听端口（默认 8000）。
+
+### 环境变量示例（.env文件）
+```bash
+# 数据库
+DATABASE_URL=mysql+asyncmy://user:password@localhost:3306/source_agent
+
+# LLM配置
+LLM_API_KEY=your_llm_api_key
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_DEFAULT_MODEL=gpt-4
+
+# 外部搜索
+WEB_SEARCH_API_KEY=your_web_search_key
+
+# 硅基流动向量嵌入（前端使用）
+REACT_APP_SILICONFLOW_API_KEY=your_siliconflow_api_key
+
+# CORS
+CORS_ORIGINS=http://localhost:3000,http://localhost:5173
+```
 
 ## 9. 已知行为/约束
 - /conversations/sync 仅写入“最新一条”消息，避免历史被覆盖；历史读取依赖 GET /conversations/{id}/messages。
