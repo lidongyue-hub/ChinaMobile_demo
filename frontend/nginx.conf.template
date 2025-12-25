@@ -1,0 +1,98 @@
+events {
+    worker_connections 1024;
+}
+
+http {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+
+    # 定义backend upstream
+    upstream backend_upstream {
+        server ${BACKEND_HOST}:${BACKEND_PORT};
+    }
+
+    server {
+        listen 80;
+        server_name localhost;
+
+        root /usr/share/nginx/html;
+        index index.html;
+
+        # Enable gzip compression
+        gzip on;
+        gzip_vary on;
+        gzip_min_length 1024;
+        gzip_proxied any;
+        gzip_comp_level 6;
+        gzip_types
+            text/plain
+            text/css
+            text/xml
+            text/javascript
+            application/javascript
+            application/xml+rss
+            application/json;
+
+        # Handle client routing, return all requests to index.html
+        location / {
+            try_files $uri $uri/ /index.html;
+        }
+
+        # Proxy backend API requests
+        location /api/ {
+            proxy_pass http://backend_upstream/api/;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+
+            # CORS headers
+            add_header 'Access-Control-Allow-Origin' '*' always;
+            add_header 'Access-Control-Allow-Methods' 'GET, POST, PUT, DELETE, OPTIONS' always;
+            add_header 'Access-Control-Allow-Headers' 'Content-Type, Authorization' always;
+
+            # Handle preflight requests
+            if ($request_method = 'OPTIONS') {
+                return 204;
+            }
+        }
+
+        # Proxy MOI database requests to avoid CORS issues
+        location /moi-api/ {
+            proxy_pass https://freetier-01.cn-hangzhou.cluster.matrixonecloud.cn/;
+            proxy_set_header Host freetier-01.cn-hangzhou.cluster.matrixonecloud.cn;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+
+            # 支持多种认证方式
+            # 如果前端发送了Authorization头，则转发；否则使用默认的moi-key
+            proxy_set_header Authorization $http_authorization;
+            proxy_set_header moi-key aAVwjAZB4RG_JcPaFR0ZVR4r5yitSjHeKimpdSFKsDaBEt4QzZGZk35D2dEIBmXXbJKG7XHTsTzq-GyC;
+            proxy_set_header X-API-Key $http_x_api_key;
+
+            # CORS headers
+            add_header 'Access-Control-Allow-Origin' '*' always;
+            add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS' always;
+            add_header 'Access-Control-Allow-Headers' 'Content-Type, moi-key' always;
+
+            # Handle preflight requests
+            if ($request_method = 'OPTIONS') {
+                return 204;
+            }
+        }
+
+        # Cache static assets
+        location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg)$ {
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+        }
+
+        # Security headers
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header X-XSS-Protection "1; mode=block" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "no-referrer-when-downgrade" always;
+        add_header Content-Security-Policy "default-src 'self' http: https: data: blob: 'unsafe-inline'" always;
+    }
+}

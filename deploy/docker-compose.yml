@@ -32,6 +32,17 @@ services:
       context: ../frontend
       dockerfile: Dockerfile
     container_name: sca-frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      BACKEND_HOST: backend
+      BACKEND_PORT: 8000
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports:
       - "5173:80"
 

@@ -139,8 +139,67 @@
 - DATABASE_URL：必填，asyncmy DSN。
 - LLM_API_KEY / LLM_BASE_URL / LLM_DEFAULT_MODEL / LLM_MAX_TOKENS / LLM_TEMPERATURE / LLM_STREAM。
 - WEB_SEARCH_API_KEY / WEB_SEARCH_API_URL（如启用外部搜索）。
+- REACT_APP_SILICONFLOW_API_KEY：硅基流动API密钥（前端向量嵌入使用）。
 - CORS_ORIGINS：逗号分隔，含 * 时不带 credentials。
 - PORT：后端监听端口（默认 8000）。
+
+### 环境变量示例（.env文件）
+```bash
+# 数据库
+DATABASE_URL=mysql+asyncmy://user:password@localhost:3306/source_agent
+
+# LLM配置
+LLM_API_KEY=your_llm_api_key
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_DEFAULT_MODEL=gpt-4
+
+# 外部搜索
+WEB_SEARCH_API_KEY=your_web_search_key
+
+# 硅基流动向量嵌入（前端使用）
+REACT_APP_SILICONFLOW_API_KEY=your_siliconflow_api_key
+
+# CORS
+CORS_ORIGINS=http://localhost:3000,http://localhost:5173
+```
+
+## 日志查看
+
+### 查看所有服务日志
+```bash
+# 查看所有服务的实时日志
+docker-compose -f deploy/docker-compose.yml logs -f
+
+# 查看所有服务的最新日志
+docker-compose -f deploy/docker-compose.yml logs
+```
+
+### 查看特定服务日志
+```bash
+# 后端日志
+docker-compose -f deploy/docker-compose.yml logs -f backend
+
+# 前端日志
+docker-compose -f deploy/docker-compose.yml logs -f frontend
+
+# 数据库日志
+docker-compose -f deploy/docker-compose.yml logs -f db
+```
+
+### 实时监控日志
+```bash
+# 实时查看所有日志
+docker-compose -f deploy/docker-compose.yml logs -f --tail=100
+
+# 只查看错误日志
+docker-compose -f deploy/docker-compose.yml logs 2>&1 | grep -i error
+```
+
+### 日志内容说明
+- `[API]` - 前端API调用日志
+- `[Embedding]` - 向量生成功能日志
+- `[INFO/ERROR]` - 后端应用日志
+- 包含请求参数、向量生成状态、查询结果等详细信息
 
 ## 9. 已知行为/约束
 - /conversations/sync 仅写入“最新一条”消息，避免历史被覆盖；历史读取依赖 GET /conversations/{id}/messages。
