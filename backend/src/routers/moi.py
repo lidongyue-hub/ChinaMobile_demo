@@ -106,7 +106,7 @@ async def query_historical_performance(request: QueryHistoricalPerformanceReques
     try:
         logger.info(f"收到历史表现查询请求: item_name='{request.item_name}', has_embedding={request.embedding is not None}")
 
-        client = get_moi_client()
+        client = get_matrixone_client()
 
         # 优先使用向量查询
         if request.embedding:
@@ -255,7 +255,7 @@ LIMIT 10;
         """.strip()
         
         client = get_matrixone_client()
-        result = await client.run_sql(sql)
+        result = await client.run_sql(fallback_sql)
         
         return SQLQueryResponse(
             columns=result.get("columns", []),
@@ -283,7 +283,7 @@ async def query_secondary_price(request: QuerySecondaryPriceRequest) -> SQLQuery
     try:
         logger.info(f"收到二采价格查询请求: item_name='{request.item_name}', has_embedding={request.embedding is not None}")
 
-        client = get_moi_client()
+        client = get_matrixone_client()
 
         # 优先使用向量查询
         if request.embedding:
@@ -389,7 +389,7 @@ LIMIT 10;
         """.strip()
         
         client = get_matrixone_client()
-        result = await client.run_sql(sql)
+        result = await client.run_sql(fallback_sql)
         
         return SQLQueryResponse(
             columns=result.get("columns", []),
